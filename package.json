@@ -1,0 +1,17 @@
+{
+  "name": "hafiz",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hafiz - smart, encrypted notes, links and passwords that sync between Windows and Android",
+  "type": "module",
+  "scripts": {
+    "vendor": "node tools/build-vendor.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "serve": "npx --yes http-server . -p 8080 -c-1"
+  },
+  "devDependencies": {
+    "@fontsource/ibm-plex-sans-arabic": "^5.2.5",
+    "esbuild": "^0.25.0",
+    "firebase": "^12.19.0"
+  }
+}

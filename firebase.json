@@ -1,0 +1,33 @@
+{
+  "firestore": {
+    "database": "default",
+    "rules": "firestore.rules"
+  },
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "firestore.rules",
+      "package.json",
+      "package-lock.json",
+      "README.md",
+      "tools/**",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      { "source": "sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+      { "source": "firebase-config.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+      { "source": "**", "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ] }
+    ]
+  },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}
