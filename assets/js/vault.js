@@ -58,6 +58,8 @@ export class Vault extends EventTarget {
     this.items = new Map();
     this.revs = new Map();
     this.blobCache = new Map();
+    // Records that exist but can't be decrypted with the current key (shown as a warning).
+    this.unreadable = new Set();
     this.key = null;
     this.kek = null;
     this.sync = { state: backend.kind === 'local' ? 'local' : 'connecting' };
@@ -130,7 +132,9 @@ export class Vault extends EventTarget {
     let meta = await this.backend.getMeta();
     let key;
     if (!meta) {
-      // Account exists but the vault was never initialised (e.g. interrupted sign-up).
+      // The vault key is missing. Only start a fresh vault if there is no data yet (an
+      // interrupted sign-up); otherwise a new key would silently hide everything saved.
+      if (await this.backend.hasItems()) throw new VaultError('vaultKeyMissing');
       const created = await createVaultKey(kek);
       meta = { v: 1, iterations: KDF_ITERATIONS, wrapped: created.wrapped, createdAt: Date.now() };
       await this.backend.setMeta(meta);
@@ -190,6 +194,7 @@ export class Vault extends EventTarget {
     this.key = key;
     this.items.clear();
     this.revs.clear();
+    this.unreadable.clear();
     this.ready = false;
     if (remember) await kv.set('remembered:' + this.backend.vaultId, key);
     this.queue = Promise.resolve();
@@ -280,13 +285,16 @@ export class Vault extends EventTarget {
         const item = await decryptJSON(this.key, rec, rec.id);
         this.items.set(rec.id, { ...blankItem(item.type), ...item, id: rec.id });
         this.revs.set(rec.id, rec.iv);
+        this.unreadable.delete(rec.id);
         changed = true;
       } catch (err) {
         console.warn('Could not decrypt record', rec.id, err);
+        if (!this.unreadable.has(rec.id)) changed = true;
+        this.unreadable.add(rec.id);
       }
     }
     for (const id of removals) {
-      changed = this.items.delete(id) || changed;
+      changed = this.items.delete(id) || this.unreadable.delete(id) || changed;
       this.revs.delete(id);
     }
     if (!this.ready) {

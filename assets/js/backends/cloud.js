@@ -85,6 +85,11 @@ class CloudBackend {
     return fb.setDoc(fb.doc(this.db, ...this.path('meta', 'vault')), meta);
   }
 
+  async hasItems() {
+    const snap = await fb.getDocs(fb.collection(this.db, ...this.path('items')));
+    return !snap.empty;
+  }
+
   watchAuth(cb) {
     return fb.onAuthStateChanged(this.auth, cb);
   }

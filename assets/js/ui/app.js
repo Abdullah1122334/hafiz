@@ -600,6 +600,9 @@ function render() {
   const items = filtered();
   const searching = !!state.query.trim();
   let html = '';
+  if (vault.unreadable.size) {
+    html += `<div class="banner warn">${icon('alert')}<span>${esc(t('unreadable', { n: vault.unreadable.size }))}</span></div>`;
+  }
   if (state.view === 'trash' && items.length) {
     html += `<div class="banner">${icon('info')}<span>${esc(t('trashNote'))}</span><button class="btn btn-ghost btn-sm" data-action="empty-trash">${icon('trash')}${esc(t('emptyTrash'))}</button></div>`;
   }
