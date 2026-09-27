@@ -43,6 +43,7 @@ export function startApp(v) {
     toast(code.includes('permission') ? t('err.permission') : t('err.write'), { kind: 'error', duration: 6000 });
   }, { signal });
   vault.addEventListener('migrated', (e) => toast(t('migrated', { n: e.detail }), { kind: 'success' }), { signal });
+  vault.addEventListener('healed', (e) => toast(t('healed', { n: e.detail }), { kind: 'success', duration: 7000 }), { signal });
   vault.addEventListener('password-changed-elsewhere', () => {
     toast(t('passwordChangedElsewhere'), { kind: 'info', duration: 7000 });
     vault.lock();
