@@ -1,5 +1,5 @@
 // Hafiz service worker: offline app shell + Android share target.
-const VERSION = 'hafiz-v1.0.3';
+const VERSION = 'hafiz-v1.0.4';
 const SHELL = [
   './',
   './index.html',

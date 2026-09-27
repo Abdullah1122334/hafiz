@@ -420,6 +420,19 @@ export class Vault extends EventTarget {
     this.track(this.backend.deleteItem(id));
   }
 
+  // Permanently removes records no known key can open (e.g. after a lost vault key).
+  async purgeUnreadable() {
+    const ids = [...this.unreadable];
+    for (const id of ids) {
+      this.unreadable.delete(id);
+      this.records.delete(id);
+      this.revs.delete(id);
+      this.track(this.backend.deleteItem(id));
+    }
+    this.emit('change');
+    return ids.length;
+  }
+
   async emptyTrash() {
     for (const it of this.list()) if (it.trashedAt) await this.destroy(it.id);
   }

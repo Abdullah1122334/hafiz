@@ -602,7 +602,7 @@ function render() {
   const searching = !!state.query.trim();
   let html = '';
   if (vault.unreadable.size) {
-    html += `<div class="banner warn">${icon('alert')}<span>${esc(t('unreadable', { n: vault.unreadable.size }))}</span></div>`;
+    html += `<div class="banner warn">${icon('alert')}<span>${esc(t('unreadable', { n: vault.unreadable.size }))}</span><button class="btn btn-ghost btn-sm" data-action="purge-unreadable">${icon('trash')}${esc(t('purgeUnreadable'))}</button></div>`;
   }
   if (state.view === 'trash' && items.length) {
     html += `<div class="banner">${icon('info')}<span>${esc(t('trashNote'))}</span><button class="btn btn-ghost btn-sm" data-action="empty-trash">${icon('trash')}${esc(t('emptyTrash'))}</button></div>`;
@@ -824,6 +824,12 @@ async function onContentClick(e) {
       return;
     case 'empty-trash':
       if (await confirmDialog({ title: t('emptyTrash'), message: t('confirmEmptyTrash'), confirm: t('emptyTrash'), danger: true })) vault.emptyTrash();
+      return;
+    case 'purge-unreadable':
+      if (await confirmDialog({ title: t('purgeUnreadable'), message: t('confirmPurgeUnreadable', { n: vault.unreadable.size }), confirm: t('delete'), danger: true })) {
+        const n = await vault.purgeUnreadable();
+        toast(t('purgedUnreadable', { n }), { kind: 'success' });
+      }
       return;
     case 'show-more':
       state.shown += 200;
