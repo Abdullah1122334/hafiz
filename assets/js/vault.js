@@ -236,13 +236,33 @@ export class Vault extends EventTarget {
 
   // Unlock when already signed in to the cloud account on this device (works offline too).
   async unlockCloud(password, opts) {
-    const { kek } = await deriveKeys(password, cloudSalt(this.backend.user.email));
+    const email = this.backend.user.email;
+    const { kek, authSecret } = await deriveKeys(password, cloudSalt(email));
     const metaKey = 'meta:' + this.backend.vaultId;
     const cached = await kv.get(metaKey);
     // The server copy wins (it may be newer); the cached one still helps read older records.
     const server = await this.backend.getMeta().catch(() => null);
     const { keys, used } = await this.unwrapAll(kek, [server, cached]);
-    if (!keys.length) throw new VaultError('wrongPassword');
+    if (!keys.length) {
+      // No key opened. Tell a wrong password apart from a missing key document.
+      try {
+        await this.backend.signIn(email, authSecret);
+      } catch (err) {
+        throw err?.code === 'auth/network-request-failed' ? new VaultError('network') : new VaultError('wrongPassword');
+      }
+      let onServer;
+      try {
+        onServer = await this.backend.getMeta({ server: true });
+      } catch {
+        throw new VaultError('network');
+      }
+      if (onServer) throw new VaultError('wrongPassword');
+      const restored = await this.restoreMissingKey(kek, cached, opts?.reset);
+      await kv.set(metaKey, restored.meta);
+      this.kek = kek;
+      await this.open(restored.key, { ...opts, oldKeys: restored.oldKeys, wrapped: restored.meta.wrapped, metaCt: restored.meta.wrapped.ct });
+      return;
+    }
     await kv.set(metaKey, used);
     // The server lost its copy but this device still has it: put it back.
     if (!server && navigator.onLine) {

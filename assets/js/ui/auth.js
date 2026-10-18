@@ -194,7 +194,8 @@ function bind(mode) {
           btn.disabled = true;
           btn.classList.add('loading');
           try {
-            await vaultRef.signIn(email, pw, { ...opts, reset: true });
+            if (mode === 'unlock-cloud') await vaultRef.unlockCloud(pw, { ...opts, reset: true });
+            else await vaultRef.signIn(email, pw, { ...opts, reset: true });
           } catch (e2) {
             btn.disabled = false;
             btn.classList.remove('loading');
