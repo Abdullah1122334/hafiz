@@ -92,6 +92,7 @@ async function boot() {
   const vault = new Vault(backend);
   vault.addEventListener('unlocked', () => startApp(vault));
   vault.addEventListener('locked', () => showAuth(vault));
+  vault.addEventListener('key-restored', () => toast(t('keyRestored'), { kind: 'success', duration: 7000 }));
 
   const hasVault = backend.kind === 'cloud' ? !!backend.user : await vault.hasLocalVault();
   if (hasVault && (await vault.tryRememberedKey().catch(() => false))) return;

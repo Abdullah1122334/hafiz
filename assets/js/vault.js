@@ -94,7 +94,7 @@ export class Vault extends EventTarget {
     const { key, wrapped } = await createVaultKey(kek);
     await this.backend.setMeta({ v: 1, salt, iterations: KDF_ITERATIONS, wrapped, createdAt: Date.now() });
     this.kek = kek;
-    await this.open(key, opts);
+    await this.open(key, { ...opts, wrapped });
   }
 
   async unlockLocal(password, opts) {
@@ -107,7 +107,7 @@ export class Vault extends EventTarget {
       throw new VaultError('wrongPassword');
     }
     this.kek = kek;
-    await this.open(key, opts);
+    await this.open(key, { ...opts, wrapped: meta.wrapped });
   }
 
   async signUp(email, password, opts) {
@@ -122,7 +122,7 @@ export class Vault extends EventTarget {
     await this.backend.setMeta(meta);
     await kv.set('meta:' + this.backend.vaultId, meta);
     this.kek = kek;
-    await this.open(key, opts);
+    await this.open(key, { ...opts, wrapped, metaCt: wrapped.ct });
     await this.migrateLocal(password).catch(() => {});
   }
 
@@ -138,14 +138,7 @@ export class Vault extends EventTarget {
     let key;
     let oldKeys = [];
     if (!meta) {
-      // The vault key is missing. Only start a fresh vault if there is no data yet (an
-      // interrupted sign-up); otherwise a new key would silently hide everything saved.
-      if (await this.backend.hasItems()) throw new VaultError('vaultKeyMissing');
-      const created = await createVaultKey(kek);
-      meta = { v: 1, iterations: KDF_ITERATIONS, wrapped: created.wrapped, createdAt: Date.now() };
-      await this.backend.setMeta(meta);
-      key = created.key;
-      oldKeys = (await this.unwrapAll(kek, [cached])).keys;
+      ({ meta, key, oldKeys } = await this.restoreMissingKey(kek, cached, opts?.reset));
     } else {
       const found = await this.unwrapAll(kek, [meta, cached]);
       if (found.used !== meta) throw new VaultError('wrongPassword');
@@ -153,8 +146,64 @@ export class Vault extends EventTarget {
     }
     await kv.set('meta:' + this.backend.vaultId, meta);
     this.kek = kek;
-    await this.open(key, { ...opts, oldKeys, metaCt: meta.wrapped.ct });
+    await this.open(key, { ...opts, oldKeys, wrapped: meta.wrapped, metaCt: meta.wrapped.ct });
     await this.migrateLocal(password).catch(() => {});
+  }
+
+  // The server's vault-key document is gone. Rebuild it from any copy we can find — this
+  // device's cache, or the copy every item carries — instead of starting an empty vault.
+  async restoreMissingKey(kek, cached, reset = false) {
+    const recs = await this.backend.listItems();
+    const sample = recs.slice(0, 40);
+    const countReadable = async (k) => {
+      let n = 0;
+      for (const r of sample) {
+        try {
+          await decryptJSON(k, r, r.id);
+          n++;
+        } catch { /* other key */ }
+      }
+      return n;
+    };
+    const seen = new Set();
+    let best = null;
+    const others = [];
+    for (const w of [cached?.wrapped, ...recs.map((r) => r.wk)]) {
+      if (!w?.ct || seen.has(w.ct)) continue;
+      seen.add(w.ct);
+      let k;
+      try {
+        k = await unwrapVaultKey(kek, w);
+      } catch {
+        continue;
+      }
+      const n = await countReadable(k);
+      if (!best || n > best.n) {
+        if (best) others.push(best.key);
+        best = { key: k, wrapped: w, n };
+      } else others.push(k);
+    }
+    const fresh = (wrapped) => ({ v: 1, iterations: KDF_ITERATIONS, wrapped, createdAt: Date.now() });
+    if (best && (best.n > 0 || !recs.length)) {
+      const meta = { ...fresh(best.wrapped), restoredAt: Date.now() };
+      await this.backend.setMeta(meta);
+      this.emit('key-restored');
+      return { meta, key: best.key, oldKeys: others };
+    }
+    // Keys this device kept (remembered or stashed) can't rebuild the document, but they can
+    // still read the items: start a new key and let healing re-encrypt everything.
+    const deviceKeys = [];
+    const remembered = await kv.get('remembered:' + this.backend.vaultId).catch(() => null);
+    for (const k of [remembered, ...(await this.loadOldKeys())]) {
+      if (k && (await countReadable(k)) > 0) deviceKeys.push(k);
+    }
+    if (!recs.length || deviceKeys.length || reset) {
+      const created = await createVaultKey(kek);
+      const meta = fresh(created.wrapped);
+      await this.backend.setMeta(meta);
+      return { meta, key: created.key, oldKeys: [...others, ...deviceKeys] };
+    }
+    throw new VaultError('vaultKeyMissing');
   }
 
   // Unwraps every distinct vault-key wrapping this KEK can open. The first one that works is
@@ -195,15 +244,24 @@ export class Vault extends EventTarget {
     const { keys, used } = await this.unwrapAll(kek, [server, cached]);
     if (!keys.length) throw new VaultError('wrongPassword');
     await kv.set(metaKey, used);
+    // The server lost its copy but this device still has it: put it back.
+    if (!server && navigator.onLine) {
+      const exists = await this.backend.getMeta({ server: true }).catch(() => undefined);
+      if (exists === null) {
+        await this.backend.setMeta({ ...used, restoredAt: Date.now() }).catch(() => {});
+        this.emit('key-restored');
+      }
+    }
     this.kek = kek;
     const [key, ...oldKeys] = keys;
-    await this.open(key, { ...opts, oldKeys, metaCt: used.wrapped.ct });
+    await this.open(key, { ...opts, oldKeys, wrapped: used.wrapped, metaCt: used.wrapped.ct });
   }
 
   async tryRememberedKey() {
     const key = await kv.get('remembered:' + this.backend.vaultId).catch(() => null);
     if (!key) return false;
-    await this.open(key, { remember: true });
+    const cachedMeta = await kv.get('meta:' + this.backend.vaultId).catch(() => null);
+    await this.open(key, { remember: true, wrapped: cachedMeta?.wrapped });
     return true;
   }
 
@@ -215,8 +273,12 @@ export class Vault extends EventTarget {
     return !!(await kv.get('remembered:' + this.backend.vaultId).catch(() => null));
   }
 
-  async open(key, { remember = false, oldKeys = [], metaCt } = {}) {
+  async open(key, { remember = false, oldKeys = [], metaCt, wrapped } = {}) {
     this.key = key;
+    // Every record also carries the (password-protected) vault key, so the key can be rebuilt
+    // from the data itself if its own document is ever lost.
+    this.wrapped = wrapped || null;
+    this.triedWraps = new Set();
     this.items.clear();
     this.revs.clear();
     this.unreadable.clear();
@@ -270,6 +332,7 @@ export class Vault extends EventTarget {
         this.oldKeys.unshift(this.key);
         this.key = serverKey;
         this.metaCt = ct;
+        this.wrapped = meta.wrapped;
         if (await this.isRemembered()) await kv.set('remembered:' + this.backend.vaultId, serverKey);
         this.queue = this.queue.then(() => this.heal());
       }
@@ -328,7 +391,14 @@ export class Vault extends EventTarget {
     for (const rec of upserts) {
       if (this.revs.get(rec.id) === rec.iv) continue;
       this.records.set(rec.id, rec);
-      const found = await this.decryptRecord(rec);
+      let found = await this.decryptRecord(rec);
+      if (!found && rec.wk?.ct && this.kek && !this.triedWraps.has(rec.wk.ct)) {
+        this.triedWraps.add(rec.wk.ct);
+        try {
+          this.oldKeys.push(await unwrapVaultKey(this.kek, rec.wk));
+          found = await this.decryptRecord(rec);
+        } catch { /* wrapped with another password */ }
+      }
       if (found) {
         this.items.set(rec.id, { ...blankItem(found.item.type), ...found.item, id: rec.id });
         this.revs.set(rec.id, rec.iv);
@@ -351,6 +421,7 @@ export class Vault extends EventTarget {
       this.ready = true;
       this.emit('ready');
       this.purgeOldTrash();
+      setTimeout(() => this.backfillWraps(), 3000);
     }
     if (changed) this.emit('change');
   }
@@ -378,6 +449,7 @@ export class Vault extends EventTarget {
     const { id, ...payload } = next;
     const enc = await encryptJSON(this.key, payload, id);
     const rec = { id, iv: enc.iv, ct: enc.ct, updatedAt: next.updatedAt, v: 1 };
+    if (this.wrapped) rec.wk = { iv: this.wrapped.iv, ct: this.wrapped.ct };
     this.items.set(id, next);
     this.revs.set(id, rec.iv);
     this.records.set(id, rec);
@@ -481,6 +553,20 @@ export class Vault extends EventTarget {
     }
   }
 
+  // One-time upgrade: give items saved before records carried the key a copy of it.
+  async backfillWraps() {
+    if (!this.wrapped || !this.key || this.backend.kind !== 'cloud') return;
+    for (const [id, rec] of [...this.records]) {
+      if (rec.wk?.ct || !this.items.has(id) || !this.key) continue;
+      try {
+        await decryptJSON(this.key, rec, id);
+      } catch {
+        continue; // only an old key reads it; heal() handles those
+      }
+      await this.save(this.items.get(id), { touch: false });
+    }
+  }
+
   // Re-encrypts, with the current key, every record (and its images) that only an old key can
   // read, so all devices can open them again.
   async heal() {
@@ -545,6 +631,7 @@ export class Vault extends EventTarget {
       const next = { ...meta, wrapped, changedAt: Date.now() };
       this.kek = newK.kek;
       this.metaCt = wrapped.ct;
+      this.wrapped = wrapped;
       await this.backend.setMeta(next);
       await kv.set('meta:' + this.backend.vaultId, next);
     } else {

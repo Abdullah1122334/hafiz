@@ -181,6 +181,27 @@ function bind(mode) {
       if (!ex.code || ex.code === 'unknown') console.error(ex);
       if (mode === 'signin' && ex.code === 'wrongCredentials') return show(t('err.wrongCredentials'));
       show(t('err.' + (ex.code || 'unknown')));
+      if (ex.code === 'vaultKeyMissing' && !form.querySelector('[data-act="reset-vault"]')) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-ghost btn-block';
+        btn.dataset.act = 'reset-vault';
+        btn.textContent = t('auth.startOver');
+        err.after(btn);
+        btn.addEventListener('click', async () => {
+          const { confirmDialog } = await import('../util.js');
+          if (!(await confirmDialog({ title: t('auth.startOver'), message: t('auth.startOverConfirm'), confirm: t('auth.startOver'), danger: true }))) return;
+          btn.disabled = true;
+          btn.classList.add('loading');
+          try {
+            await vaultRef.signIn(email, pw, { ...opts, reset: true });
+          } catch (e2) {
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            show(t('err.' + (e2.code || 'unknown')));
+          }
+        });
+      }
       form.password.select();
     }
   });
